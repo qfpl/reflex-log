@@ -1,5 +1,6 @@
 { mkDerivation, base, binary, bytestring, containers, directory
-, filepath, lens, mtl, reflex, reflex-dom, stdenv, stm, text
+, filepath, lens, mtl, reflex, reflex-dom, sqlite-simple, stdenv
+, stm, text
 }:
 mkDerivation {
   pname = "reflex-log";
@@ -9,7 +10,7 @@ mkDerivation {
   isExecutable = true;
   libraryHaskellDepends = [
     base binary bytestring containers directory filepath lens mtl
-    reflex stm text
+    reflex sqlite-simple stm text
   ];
   executableHaskellDepends = [ base reflex reflex-dom text ];
   license = stdenv.lib.licenses.bsd3;

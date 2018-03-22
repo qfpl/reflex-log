@@ -124,7 +124,7 @@ fileBackend st =
     (loadFromLog st)
     (logEvent st)
     (createSnapshot st)
-    (vacuumLog $ st)
+    (vacuumLog st)
 
 mkFileLog :: (MonadFix m, PostBuild t m, MonadHold t m, PerformEvent t m, MonadIO (Performable m), MonadIO m, Read e, Show e, Show s, Read s)
           => FilePath
