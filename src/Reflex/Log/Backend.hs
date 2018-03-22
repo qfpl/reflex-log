@@ -83,10 +83,10 @@ This is an alternative approach, that looks more like foldDyn:
 
 foldLog :: (Reflex t, MonadFix m, PostBuild t m, MonadHold t m, PerformEvent t m, MonadIO (Performable m))
         => ReflexLogBackend e s
+        -> LogConfig t
         -> (e -> s -> s)
         -> s
         -> Event t e
-        -> LogConfig t
         -> m (Dynamic t s, Log t)
 
 That would be more suitable for inline usage, where the current mkLog could probably be altered to use
