@@ -12,6 +12,8 @@ mkDerivation {
     base binary bytestring containers directory filepath lens mtl
     reflex sqlite-simple stm text
   ];
-  executableHaskellDepends = [ base reflex reflex-dom text ];
+  executableHaskellDepends = [
+    base reflex reflex-dom sqlite-simple text
+  ];
   license = stdenv.lib.licenses.bsd3;
 }

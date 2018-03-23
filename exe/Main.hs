@@ -7,26 +7,39 @@ Portability : non-portable
 -}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE DeriveGeneric #-}
 module Main (
     main
   ) where
 
 import Control.Monad (void)
 
+import GHC.Generics
+
 import Reflex.Dom
+
+import Database.SQLite.Simple
+import Data.Binary
 
 import Reflex.Log
 import Reflex.Log.File
+import Reflex.Log.SQLite
 
 main :: IO ()
-main = mainWidget testMe
+main = do
+  conn <- open "test.db"
+  mainWidget $ testMe conn
+  close conn
+
 
 -- A set of commands that we would like to process:
 data Cmd =
     Add Int
   | Total
   | Clear
-  deriving (Eq, Ord, Read, Show)
+  deriving (Eq, Ord, Read, Show, Generic)
+
+instance Binary Cmd where
 
 -- The processing that we want to do:
 calc :: Cmd -> Int -> Int
@@ -34,8 +47,8 @@ calc (Add x) i = x + i
 calc Total i = i
 calc Clear _ = 0
 
-testMe :: MonadWidget t m => m ()
-testMe = el "div" $ mdo
+testMe :: MonadWidget t m => Connection -> m ()
+testMe conn = el "div" $ mdo
   -- Events which fire when we manually trigger a snapshot or a vacuum
   (eSnapshotButton, eVacuumButton) <- el "div" $
     (,) <$> button "Snapshot" <*> button "Vacuum"
@@ -58,7 +71,8 @@ testMe = el "div" $ mdo
     -- eVacuum = _lSnapshotComplete log
 
   -- Create a log of the events on the file system
-  log <- mkFileLog "testme" $ LogConfig calc 0 eCmd eSnapshot eVacuum
+  -- log <- mkFileLog "testme" $ LogConfig calc 0 eCmd eSnapshot eVacuum
+  log <- mkSQLiteLog conn "testme" $ LogConfig calc 0 eCmd eSnapshot eVacuum
   let dValue = _lValue log
 
   -- This is another way we could do things like this, see the comment block in Reflex.Log.Backend for details

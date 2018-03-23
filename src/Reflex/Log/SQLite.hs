@@ -7,11 +7,13 @@ Portability : non-portable
 -}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Reflex.Log.SQLite (
     mkSQLiteLog
   ) where
 
 import Data.Monoid
+import Data.Proxy (Proxy(..))
 
 import Control.Monad.Fix (MonadFix)
 
@@ -32,6 +34,7 @@ import Reflex.Log.Backend
 data LogState =
   LogState {
     _lsConn :: Connection
+  , _lsEventIdTable :: Query
   , _lsEventTable :: Query
   , _lsSnapshotTable :: Query
   }
@@ -66,32 +69,70 @@ instance Binary s => FromRow (SnapshotField s) where
 instance Binary s => ToRow (SnapshotField s) where
   toRow (SnapshotField sid s) = toRow (sid, encode s)
 
-loadFromLog :: (Binary e, Binary s)
+loadFromLog :: forall e s.
+               (Binary e, Binary s)
             => LogState
             -> (e -> s -> s)
             -> EventId
             -> s
             -> IO (Int, (EventId, s))
-loadFromLog st f ii is = undefined
+loadFromLog (LogState conn _ eventTable snapshotTable) f ii is =
+  withTransaction conn $ do
+    counts <- query_ conn $ "SELECT COUNT(id) FROM " <> eventTable <> " GROUP BY id"
+    let
+      count = case counts of
+        [] -> 0
+        (Only c : _) -> c
+    snapshots <- query_ conn $ "SELECT * FROM " <> snapshotTable <> " ORDER BY id DESC LIMIT 1" :: IO [SnapshotField s]
+    let
+      (zi, zs) :: (EventId, s) = case snapshots of
+        [] -> (ii, is)
+        (SnapshotField i s : _) -> (i, s)
+
+    es' <- query conn ("SELECT * FROM " <> eventTable <> " WHERE id > ?") (Only zi)
+
+    let
+      es = fmap (\(EventField i e) -> (i, e)) es'
+      res = foldr (\(i, e) (_, s) -> (i, f e s)) (zi, zs) es
+
+    pure (count, res)
 
 logEvent :: Binary e
          => LogState
          -> e
          -> IO (EventId, e)
-logEvent st e = undefined
+logEvent (LogState conn eventIdTable eventTable _) e =
+  withTransaction conn $ do
+    [Only i] <- query_ conn $ "SELECT * FROM " <> eventIdTable
+    execute conn ("INSERT INTO " <> eventTable <> " VALUES (?, ?)") (EventField i e)
+    execute_ conn $ "UPDATE " <> eventIdTable <> " SET id = id + 1"
+    pure $ (i, e)
 
 createSnapshot :: Binary s
                => LogState
                -> (EventId, s)
                -> IO ()
-createSnapshot st (i, s) =
-  execute (_lsConn st) ("INSERT INTO " <> _lsSnapshotTable st <> " VALUES (?,?)") (SnapshotField i s)
+createSnapshot (LogState conn _ _ snapshotTable) (i, s) =
+  withTransaction conn $ do
+    execute conn ("INSERT INTO " <> snapshotTable <> " VALUES (?,?)") (SnapshotField i s)
 
-vacuumLog :: LogState
+vacuumLog :: forall s.
+             Binary s
+          => Proxy s
+          -> LogState
           -> IO ()
-vacuumLog st = undefined
+vacuumLog _ (LogState conn _ eventTable snapshotTable) = do
+  withTransaction conn $ do
+    is <- query_ conn $ "SELECT * FROM " <> snapshotTable <> " ORDER BY id DESC LIMIT 1" :: IO [SnapshotField s]
+    case is of
+      [] -> pure ()
+      (SnapshotField i _ : _) -> do
+        execute conn ("DELETE FROM " <> snapshotTable <> " WHERE id < ?") (Only $ i)
+        execute conn ("DELETE FROM " <> eventTable <> " WHERE id <= ?") (Only $ i)
+  execute_ conn "VACUUM"
 
-sqliteBackend :: (Binary e, Binary s)
+sqliteBackend :: forall e s.
+                 (Binary e, Binary s)
               => LogState
               -> ReflexLogBackend e s
 sqliteBackend st =
@@ -99,7 +140,7 @@ sqliteBackend st =
     (loadFromLog st)
     (logEvent st)
     (createSnapshot st)
-    (vacuumLog st)
+    (vacuumLog (Proxy :: Proxy s) st)
 
 mkSQLiteLog :: (MonadFix m, PostBuild t m, MonadHold t m, PerformEvent t m, MonadIO (Performable m), MonadIO m, Binary e, Binary s)
           => Connection
@@ -107,11 +148,25 @@ mkSQLiteLog :: (MonadFix m, PostBuild t m, MonadHold t m, PerformEvent t m, Mona
           -> LogConfig t e s
           -> m (Log t s)
 mkSQLiteLog conn baseName lc = do
-  let st = LogState conn (baseName <> "_events") (baseName <> "_snapshots")
-  liftIO $ do
+  let
+    eventIdTable = baseName <> "_event_id"
+    eventTable = baseName <> "_events"
+    snapshotTable = baseName <> "_snapshots"
+    st = LogState conn eventIdTable eventTable snapshotTable
+
+  liftIO . withTransaction conn $ do
     execute_ conn $
-      "CREATE TABLE IF NOT EXISTS " <> _lsEventTable st <> " (id INTEGER PRIMARY KEY, event BLOB)"
+      "CREATE TABLE IF NOT EXISTS " <> eventIdTable <> " (id INTEGER PRIMARY KEY)"
+
+    ids <- query_ conn $ "SELECT * FROM " <> eventIdTable :: IO [Only Int]
+    case ids of
+      [] -> execute_ conn $ "INSERT INTO " <> eventIdTable <> " VALUES (1)"
+      _ -> pure ()
+
     execute_ conn $
-      "CREATE TABLE IF NOT EXISTS " <> _lsSnapshotTable st <> " (id INTEGER PRIMARY KEY, snapshot BLOB)"
+      "CREATE TABLE IF NOT EXISTS " <> eventTable <> " (id INTEGER PRIMARY KEY, event BLOB)"
+    execute_ conn $
+      "CREATE TABLE IF NOT EXISTS " <> snapshotTable <> " (id INTEGER PRIMARY KEY, snapshot BLOB)"
+
   mkLog (sqliteBackend st) lc
 
